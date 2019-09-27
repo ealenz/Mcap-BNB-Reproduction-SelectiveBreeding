@@ -1,0 +1,1274 @@
+---
+title: "Lenz_BNB_Breeding2019"
+author: "Elizabeth Lenz"
+date: "9/27/2019"
+output: html_document
+---
+title: "Lenz_B_NB_ReproductivePhysiology"
+author: "Elizabeth Lenz"
+date: "3/22/2019"
+output: html_document
+---
+
+## Assessing impacts of bleaching susceptibility on sexual reproductive during recovery and sexual reproduction
+
+# Packages required to run script
+
+```{r setup, include=FALSE, message = FALSE}
+rm(list=ls())
+library(dplyr) #data manipulation
+library(ggplot2) #Plotting package
+library(MuMIn) #AIC package to select best fit model
+library(effects) #model effects for anova (using lm): (plot(alleffects(model))))
+library(car) #Anova(model): F tests
+library(PerformanceAnalytics)
+library(vegan)
+library(psych)
+library(gridExtra)
+library(grid)
+library(Rmisc) #Basic statistical summary package
+library(MASS)
+library(aod) ## For Binary data
+library(survival) #for Kaplan Meier Survivorship
+library(devtools)
+library(survminer) #for Kaplan Meier Survivorship
+library(grid) #ggplotGrob 
+library(pscl) #zero inflated
+library(lme4) #linear mixed effects model
+library(lmerTest)
+library(emmeans) #posthoc analysis for lmer
+library(cowplot) # grid.arrange axis alignment
+library(glmmTMB) #glm for zero inflated data
+library(rcompanion) #histogram plot residuals
+library(DHARMa) # to inspect dispersion of glmer 
+library(pbkrtest)
+library(rstanarm)
+library(tidyr)
+library(betareg)
+
+```
+
+Setting working directory
+```{r}
+setwd("~/Desktop/Chapters/CH2_BNB_Repro/Rdata")
+```
+
+## Historical Temperatures
+```{r}
+Temp <- read.csv("NOAA.SWtemp2010_2016_MokuOLoe.csv", header = TRUE) #NOAA Buoy Mokuoloe Data from http://tidesandcurrents.noaa.gov/stationhome.html?id=1612480
+Temp <- Temp[,c("DateTime","Temp")] # only select first two columns
+Temp$DateTime <- as.character(Temp$DateTime) #to convert Date need to first format as character
+Temp$DateTime <- as.POSIXct(Temp$DateTime, format = "%m/%e/%y %H:%M")#format date with month/day/year hour:minute
+head(Temp)
+
+
+
+Temp.Fig <- {plot(Temp~DateTime, data = Temp,ylab = "Temperature (°C)", col = "black", type = "l", lwd = 2, xlab = "Year", ylim = c(20,32)) #Plot NOAA Mokuloe Buoy data from 2014-2016
+abline(h=30, lty = 2, lwd= 1, col = "darkred")
+abline(h=31, lty = 2, lwd= 1, col = "darkred")} # Hortizontal line for 30C threshold
+
+jpeg("temp.jpg")
+Temp.Fig
+
+while (!is.null(dev.list()))  dev.off()
+```
+
+
+## PART 1: IMPACTS OF BLEACHING ON REPRODUCTION
+
+## SPAWNING DYNAMICS 
+Collected from Bleached (n=8) and Nonbleached (n=7) colonies, watched during 5 night periods over 3 months of spawning in 2016 and 2017.
+
+Proportion that spawned over night
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+spawn <- read.csv("Lenz_McapExSitu_Spawning2016_2017.csv")
+spawn$SpawningMonth <- as.factor(spawn$SpawningMonth)
+spawn$Year <- as.factor(spawn$Year)
+spawn$Night <- as.factor(spawn$Night)
+```
+
+#GLM Model for Spawning Dynamics
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+spawn.glm <- glmer(Spawn ~ B.NB*Year + (1|Colony.ID) + (1|SpawningMonth), spawn, family = binomial) ###FIX!
+Anova(spawn.glm, type = 2)
+
+summary(spawn.glm)
+shapiro.test(residuals(spawn.glm))
+qqnorm(residuals(spawn.glm))
+posthoc1 <- emmeans(spawn.glm, pairwise~Year, adjust = "tukey")
+CLD(posthoc1, Letters=letters)
+plot(allEffects(spawn.glm))
+
+#spawn.table2 <- tab_model(spawn.glm, show.stat = TRUE, show.ci = 0.95, show.fstat = TRUE, show.se = TRUE, show.intercept = TRUE, string.se = "SE", string.stat = "Z-value",show.aic = TRUE, show.icc = TRUE, show.est = TRUE)
+
+plot(allEffects(spawn.glm))
+qqnorm(residuals(spawn.glm))
+plot(residuals(spawn.glm))
+simulationOutput <- simulateResiduals(fittedModel = spawn.glm)
+plot(simulationOutput)
+testUniformity(simulationOutput)
+testDispersion(simulationOutput)
+```
+
+Create Figure for Spawning
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+spawnsuccess <- aggregate(Spawn~Colony.ID*Year*B.NB, data = spawn, sum, na.rm=TRUE)
+write.csv(spawnsuccess, file = "spawncolony.csv")
+
+spawn1 <- aggregate(Spawn~Year+B.NB+Date+SpawningMonth+Night, data = spawn, sum, na.rm=TRUE)
+
+spawn1$totalcol <- ifelse(spawn1$B.NB == "Bleach", 8,
+                          ifelse(spawn1$B.NB == "Nonbleach", 7, NA )) 
+spawn1$percspawn <- spawn1$Spawn/spawn1$totalcol*100
+
+
+spawn1$SpawningMonth <- as.numeric(spawn1$SpawningMonth)
+spawn1$Date <- as.factor(spawn1$Date)
+spawn1$MonthMoon <- paste(spawn1$SpawningMonth,spawn1$Night)
+spawn1$propspawn <- spawn1$percspawn/100
+spawn16 <- spawn1[ which(spawn1$Year==2016),] #subset 2016
+spawn17 <- spawn1[ which(spawn1$Year==2017),] #subset 2017
+  
+spawn1$MonthMoon <- as.factor(spawn1$MonthMoon)
+spawnprop.fig <- ggplot(data = spawn1, aes (x=MonthMoon, y = propspawn, group = B.NB, shape = B.NB)) +
+  geom_line(aes(linetype = B.NB), size = 1) +
+  geom_point(size=5, aes(color = B.NB), position = position_dodge(width = 0.5)) +
+  scale_linetype_manual(values = c("dashed","solid")) +
+  facet_grid(~Year) +
+  scale_color_manual(values = c("Bleach" = "white", "Nonbleach" = "grey34")) +
+  scale_shape_manual(values = c(19, 16)) +
+  expand_limits(y=0) +
+  ylab("Proportion Spawned") +
+  xlab("Spawning Month") +
+  theme_bw() +
+  theme(plot.title = element_text(lineheight = 0.8, face = "bold",size = 25), # panel.grid.minor=element_blank()
+        plot.margin = margin(3,3,8,8, "pt"),
+        panel.border = element_blank(), #  plot.background=element_blank()
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.text = element_text(size=25), #Label Year       
+        legend.title = element_blank(),
+        legend.text = element_text(size=15),
+        legend.key = element_blank(),
+        legend.position = c(0.4,0.9),
+        axis.line.x = element_line(color = "black"),
+        axis.line.y = element_line(color = "black"),
+        axis.text.y = element_text(size = 15),
+        axis.text.x = element_text(size = 15, angle = 90, hjust = 1),
+        axis.title.x = element_text(size=20),
+        axis.title.y = element_text(size=20))
+ggsave("propspawnfig.pdf")
+```
+
+Proportion Spawned 
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+spawnsummary <- read.csv("spawnsummary.csv")
+summary(spawnsummary)
+spawnsummary$SpawningMonth <- as.factor(spawnsummary$SpawningMonth)
+
+spawn2prop.fig <- ggplot(data = spawnsummary, aes (x=SpawningMonth, y = propspawn, colour = Parental.Performance, fill = Parental.Performance)) +
+  geom_bar(stat = "identity", position = position_dodge(), color = "black") +
+  facet_grid(~Year) +
+  scale_fill_manual(values = c("Bleach" = "white", "Nonbleach" = "grey34")) +
+  scale_shape_manual(values = c(19, 16)) +
+  expand_limits(y=0) +
+  ylab("Proportion Spawned") +
+  xlab("Spawning Month") +
+  theme_bw() +
+  theme(plot.title = element_text(lineheight = 0.8, face = "bold",size = 25), # panel.grid.minor=element_blank()
+        plot.margin = margin(3,3,8,8, "pt"),
+        panel.border = element_blank(), #  plot.background=element_blank()
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.text = element_text(size=25), #Label Year       
+        legend.title = element_blank(),
+        legend.text = element_text(size=15),
+        legend.key = element_blank(),
+        legend.position = c(0.5,0.9),
+        axis.line.x = element_line(color = "black"),
+        axis.line.y = element_line(color = "black"),
+        axis.text.y = element_text(size = 15),
+        axis.text.x = element_text(size = 15),
+        axis.title.x = element_text(size=20),
+        axis.title.y = element_text(size=20))
+
+spawn2prop.fig 
+```
+
+TOTAL REPRODUCTIVE OUTPUT
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+
+repro <- read.csv('Lenz_McapExSitu_ReproOutput2016-2017.csv') #create dataframe of reproductive output
+summary(repro) #Summary of the units
+
+hist(repro$microL.cm2, breaks = 30)
+hist(log10(repro$microL.cm2+1)) 
+repro$logOut <- log(repro$microL.cm2)  #Use log transformed data!
+hist(repro$logOut)
+
+repro$Year <- as.factor(repro$Year)
+repro$SpawningMonth <- as.factor(repro$SpawningMonth)
+repro$Colony <- as.factor(repro$Colony)
+repro$Date <- as.character(repro$Date)
+repro$Date <- as.Date(repro$Date, format = '%Y%m%d')
+repro$DM <- format(repro$Date, format = "%m-%d")
+repro$DM <- as.Date(repro$DM, format = "%m-%d")
+```
+
+Analyze fecundity over spawning seasons
+```{r}
+
+hist(repro$microL.cm2, breaks = 30)
+
+rep1 <- aggregate(microL.cm2~Parental.Performance + Year + Colony, data = repro, sum, na.rm=TRUE)
+
+repro.mod1 <- lmer(microL.cm2 ~ Parental.Performance*Year + (1|Colony), rep1)
+
+Anova(repro.mod1, type =2)
+summary(repro.mod1)
+qqnorm(residuals(repro.mod1))
+shapiro.test(residuals(repro.mod1))
+TukeyHSD(aov(repro.mod1))
+
+rep16 <- rep1[ which(rep1$Year==2016),] #subset 2016
+rep17 <- rep1[ which(rep1$Year==2017),] #subset 2016
+
+rep16mod <- lm(log(microL.cm2) ~ Parental.Performance, rep16)
+Anova(rep16mod, type = 2)
+summary(rep16mod)
+qqnorm(residuals(rep16mod))
+
+rep17mod <- lm(log(microL.cm2) ~ Parental.Performance, rep17)
+Anova(rep17mod, type = 2)
+summary(rep16mod)
+qqnorm(residuals(rep16mod))
+
+
+repro.mod2 <- lmer(microL.cm2 ~ Parental.Performance + (1|Colony), rep1)
+Anova(repro.mod2, type =2)
+summary(repro.mod2)
+qqnorm(residuals(repro.mod2))
+shapiro.test(residuals(repro.mod2))
+
+rep2 <- aggregate(microL.cm2~Parental.Performance + Colony, data = repro, sum, na.rm=TRUE)
+hist(rep2$microL.cm2, breaks = 10)
+
+repro.mod3 <- lm(microL.cm2 ~ Parental.Performance, rep2)
+
+Anova(repro.mod3, type = 2)
+summary(repro.mod3)
+anova(repro.mod3)
+qqnorm(residuals(repro.mod3))
+shapiro.test(residuals(repro.mod3)) 
+
+leveneTest(residuals(repro.mod1)~rep1$Parental.Performance)
+boxplot(residuals(repro.mod1)~rep1$Parental.Performance)
+plot(residuals(repro.mod1))
+simulationOutput <- simulateResiduals(fittedModel = repro.mod1)
+plot(simulationOutput)
+testUniformity(simulationOutput)
+testDispersion(simulationOutput)
+```
+
+```{r}
+
+annfecsum <- summarySE(rep1, measurevar = "microL.cm2", groupvars = c("Year","Parental.Performance"))
+
+annfec.fig <- ggplot(annfecsum, aes(x=Parental.Performance, y=microL.cm2)) + 
+  geom_bar(position="dodge", stat = "identity", colour="black", aes(fill=Parental.Performance)) +
+  geom_errorbar(aes(ymin=microL.cm2-se, ymax=microL.cm2+se), colour = "black", width = 0.2, position = position_dodge(0.9)) +
+  facet_grid(~Year) + 
+   scale_fill_manual(values = c("bisque", "chocolate4") ) +
+  scale_y_continuous(expand = c(0,0)) +
+  labs(y = expression(Fecundity~(~{mu}~L^{-2})), x = "Bleaching History") +
+  coord_cartesian(ylim=c(0,30)) +
+  #scale_fill_hue(name="", breaks = c("Bleached", "NonBleached"), labels = c("Bleached", "Nonbleached")) +
+  #scale_fill_manual(values = c("white", "gray34")) +
+  #ggtitle("A.") +
+  theme_bw() +
+  theme(plot.title = element_text(lineheight = 0.8, face = "bold",size = 25),
+        axis.title = element_text(size = 15),
+        panel.grid.major=element_blank(),
+        strip.text = element_text(size = 25),
+        # panel.grid.minor=element_blank(),
+        panel.border = element_blank(),
+        #  plot.background=element_blank(),
+        legend.title=element_blank(),
+        legend.text = element_blank(),
+        legend.position = "none",
+        axis.line.x = element_line(color = "black"),
+        axis.line.y = element_line(color = "black"),
+        axis.text.y = element_text(size = 15),
+        axis.text.x = element_blank(),
+        axis.title.y = element_text(size = 20),
+        axis.title.x = element_blank())
+annfec.fig
+
+annfec <- summarySE(fec3, measurevar = "microL.cm2", groupvars = "Parental.Performance")
+(23.45-13.21)/23.45
+(23.45-13.21)/((23.45+13.21)/2)
+
+(23.82-18.45)/23.82*100
+```
+
+
+Accumulative Curves for output:
+```{r}
+accu.fig <- ggplot(data = repro, aes(DM, AccumulativeOutput.mL.cm2, group=Colony, colour = Parental.Performance)) +
+  geom_line() +
+  geom_path() +
+  geom_point() +
+  labs(y = expression(Fecundity~(mL~cm^{-2})), x = "Month - Day") +
+  ylim(0,100) + 
+  facet_grid(~Year) +
+  theme_bw() +
+  theme(panel.grid.major=element_blank(), # panel.grid.minor=element_blank()
+        panel.border = element_blank(), #  plot.background=element_blank()
+        legend.title=element_blank(),
+        legend.position = c(0.2,0.8),
+        legend.text = element_text(size=15),
+        legend.key = element_blank(),
+        axis.line.x = element_line(color = "black"),
+        axis.line.y = element_line(color = "black"),
+        axis.text.y = element_text(size = 15),
+        axis.text.x = element_text(size=15),
+        axis.title.x = element_text(size=20),
+        strip.text = element_text(size = 20),
+        strip.background = element_blank())
+```
+
+Egg Size between Parent Bleaching History x Year
+```{r}
+size <- read.csv("Lenz_McapExSitu_EggSize2016-2017.csv") #load in egg size csv
+size <-na.omit(size) #remove NAs
+size$SpawningMonth <- as.character(size$SpawningMonth)
+size$Diameter.mm <- as.numeric(as.character(size$Diameter.mm)) #convert and maintain values
+size$Diameter.micron <- size$Diameter.mm*1000
+size$vol.mm3 <- as.character(size$vol.mm3)
+size$vol.mm3 <- as.numeric(size$vol.mm3)
+size$vol.microm3 <- (size$vol.mm3)*1000
+hist(size$Diameter.micron, breaks = 20)
+hist(size$vol.mm3, breaks = 20)
+
+#### Assign colonies tag to correct Colony ID for individual ####
+size$Colony <- ifelse(size$Colony.ID %in% c("146/326","146"), 146,
+                          ifelse(size$Colony.ID %in% "117", 117, 
+                          ifelse(size$Colony.ID %in% c("118/330", "118"), 118,
+                          ifelse(size$Colony.ID %in% c("175/327", "175"), 175,
+                          ifelse(size$Colony.ID %in% c("125/335", "125"), 125,             
+                          ifelse(size$Colony.ID %in% c("116/332", "116"), 116, 
+                          ifelse(size$Colony.ID %in% c("124/336", "124"), 124, 
+                          ifelse(size$Colony.ID %in% c("149/329","149"), 149,              
+                          ifelse(size$Colony.ID %in% c("173/331", "173"), 173, 
+                          ifelse(size$Colony.ID %in% c("120/328", "120"), 120,                     
+                          ifelse(size$Colony.ID %in% c("174/334", "174"), 174,
+                          ifelse(size$Colony.ID %in% c("150/338", "150"), 150,
+                          ifelse(size$Colony.ID %in% c("123/333", "123"), 123,
+                          ifelse(size$Colony.ID %in% c("119/337", "119"), 119,
+                          ifelse(size$Colony.ID %in% c("121/339", "121"), 121, NA))))))))))))))) #create new column with Original Colony Value
+ 
+#### Assign Bleaching History to Colony ID ####
+
+size$B.NB <- ifelse(size$Colony %in% c(146,118,116, 124, 120,174, 150), "Nonbleach",
+                      ifelse(size$Colony %in% c(117,119, 175, 125, 149, 173, 123,121), "Bleach", NA))
+
+size$Colony <- as.factor(size$Colony)
+size$B.NB <- as.factor(size$B.NB)
+size$SpawningMonth <- as.factor(size$SpawningMonth)
+size$Date <- as.factor(size$Date)
+size$Year <- as.factor(size$Year)
+range(size$Diameter.micron)
+range(size$vol.mm3)
+```
+
+```{r}
+size <- size[which(size$Diameter.micron > 160),]
+
+Diam <- summarySE(size, measurevar = "Diameter.micron", groupvars = c("Year", "SpawningMonth", "Colony", "B.NB", "Bundle.ID","Date"), na.rm=T)
+range(Diam$Diameter.micron)
+
+Diam1 <- summarySE(Diam, measurevar = "Diameter.micron", groupvars = c("Year", "SpawningMonth", "Colony", "B.NB","Date"), na.rm=T)
+
+Diam2 <- summarySE(Diam1, measurevar = "Diameter.micron", groupvars = c("Year", "SpawningMonth", "Colony", "B.NB"), na.rm=T)
+
+Diam3 <- summarySE(Diam2, measurevar = "Diameter.micron", groupvars = c("Year", "Colony", "B.NB"), na.rm=T)
+
+Diam4 <- summarySE(Diam3, measurevar = "Diameter.micron", groupvars = c("Year", "B.NB"), na.rm=T)
+```
+
+Figure for Egg size by bleaching history and year
+```{r}
+EggDiam.fig <- ggplot(Diam4, aes(x=B.NB, y=Diameter.micron, fill = B.NB)) + 
+  geom_bar(position="dodge", stat = "identity", colour="black") +
+  scale_fill_manual(values = c("bisque", "chocolate4")) +
+  facet_grid(~Year) +
+  geom_errorbar(aes(ymin=Diameter.micron-se, ymax=Diameter.micron+se), colour = "black", width = 0.2) +
+  coord_cartesian(ylim=c(400,480)) +
+  ylab("Egg Diameter") +
+  xlab("Bleaching History") +
+  #scale_fill_hue(name="", breaks = c("Bleached", "NonBleached"), labels = c("Bleached", "Nonbleached")) +
+   theme(plot.title = element_text(lineheight = 0.8, face = "bold",size = 25),
+        axis.title = element_text(size = 15),
+        panel.grid.major=element_blank(),
+        strip.text = element_blank(),
+        # panel.grid.minor=element_blank(),
+        panel.border = element_blank(),
+        #  plot.background=element_blank(),
+        legend.title=element_blank(),
+        legend.text = element_blank(),
+        legend.position = "none",
+        axis.line.x = element_line(color = "black"),
+        axis.line.y = element_line(color = "black"),
+        axis.text.y = element_text(size = 15),
+        axis.text.x = element_text(size = 15),
+        axis.title.y = element_text(size = 20),
+        axis.title.x = element_text(size = 20)) 
+EggDiam.fig  
+```
+
+
+Linear model Egg diameter ~ BleachingHistory * Year
+```{r}
+Diam.mod <- lmer(Diameter.micron ~ Year*B.NB + (1|Colony) + (1|SpawningMonth), Diam1)
+Anova(Diam.mod)
+summary(Diam.mod1)
+qqnorm(residuals(Diam.mod))
+shapiro.test(residuals(Diam.mod))
+
+plot(residuals(Diam.mod))
+simulationOutput <- simulateResiduals(fittedModel = Diam.mod)
+plot(simulationOutput)
+testUniformity(simulationOutput)
+testDispersion(simulationOutput)
+```
+
+Egg volume ~ Year*BleachingHistory
+
+```{r}
+size1 <- size[which(size$vol.mm3 > 0.003),]
+size1 <- size1[which(size$vol.mm3 < 0.16),]
+hist(size1$vol.mm3,breaks = 50)
+
+Vol <- summarySE(size, measurevar = "vol.mm3", groupvars = c("Year", "SpawningMonth", "Colony", "B.NB", "Bundle.ID","Date"), na.rm=T)
+range(Vol$vol.mm3)
+Vol <- na.omit(Vol)
+vol.lm <- lm(Vol$vol.mm3~Vol$N)
+Anova(vol.lm)
+shapiro.test(residuals(vol.lm))
+plot(Vol$vol.mm3~Vol$N)
+abline(vol.lm)
+
+Vol16 <- Vol[ which(Vol$Year==2016),] #subset 2016
+Vol17 <- Vol[ which(Vol$Year==2017),] #subset 2016
+B2016 <- Vol16[ which(Vol16$B.NB=="Bleach"),] #subset Bleach in 2016
+B2017 <- Vol17[ which(Vol17$B.NB=="Bleach"),] #subset Bleach in  2017
+NB2016 <- Vol16[ which(Vol16$B.NB=="Nonbleach"),] #subset Bleach in 2016
+NB2017 <- Vol17[ which(Vol17$B.NB=="Nonbleach"),] #subset Bleach in  2017
+
+
+
+lm <- lm(Vol$vol.mm3~Vol$N) #linear regression of egg size to lm
+conf = seq(min(Diam$N),max(Diam$N),by = 0.05)
+
+anova(lm)
+summary(lm)
+
+lm16 <- lm(Vol16$vol.mm3~Vol16$N)
+anova(lm16)
+summary(lm16)
+
+lm17 <- lm(Vol17$vol.mm3~Vol17$N)
+anova(lm17)
+summary(lm17)
+
+lmb16 <- lm(B2016$vol.mm3~B2016$N)
+anova(lmb16)
+summary(lmb16)
+
+{plot(vol.mm3~N, Vol, ylab = "Egg Volume (mm3)", xlab = "Eggs per Bundle", col=ifelse(Vol$Year=="2016", "red", "blue"))
+
+abline(lm, lwd = 2)
+abline(lm16, lwd = 2, col = "red")
+abline(lm17, lwd = 2, col = "blue")
+legend(23, 0.57, legend=c("2016", "2017"),
+       col=c("dark red", "dark blue"), lty = 1, lwd = 4, cex=2)}
+
+abline(lmB16, col="red", lwd = 2)
+abline(lmB17, col = "orange", lwd = 2)
+abline(lmNB16, col = "blue", lwd = 2)
+abline(lmNB17, col = "dark blue", lwd = 2)
+abline(lm16, col = "dark red", lwd =4)
+abline(lm17, col = "dark blue", lwd = 4)
+legend(23, 0.57, legend=c("2016", "2017"),
+       col=c("dark red", "dark blue"), lty = 1, lwd = 4, cex=2)
+
+```
+
+```{r}
+Vol1 <- summarySE(Vol, measurevar = "vol.mm3", groupvars = c("Year", "SpawningMonth", "Colony", "B.NB","Bundle.ID"), na.rm=T)
+range(Vol1$vol.mm3)
+
+Vol2 <- summarySE(Vol1, measurevar = "vol.mm3", groupvars = c("Year", "SpawningMonth", "Colony", "B.NB"), na.rm=T)
+range(Vol2$N)
+
+Vol3 <- summarySE(Vol2, measurevar = "vol.mm3", groupvars = c("Year", "SpawningMonth", "Colony", "B.NB"), na.rm=T)
+
+Vol4 <- summarySE(Vol2, measurevar = "vol.mm3", groupvars = c("Year", "B.NB", "Colony"), na.rm=T)
+Vol4 <- Vol4[ c(1:4),]
+Vol4 #summary
+
+```
+
+Figure for Egg Volume by Year * Bleaching History
+```{r}
+EggVol.fig <- ggplot(Vol4, aes(x=B.NB, y=vol.mm3, fill = B.NB)) + 
+  geom_bar(position="dodge", stat = "identity", colour="black") +
+  scale_fill_manual(values = c("bisque", "chocolate4")) +
+  facet_grid(~Year) +
+  geom_errorbar(aes(ymin=vol.mm3-se, ymax=vol.mm3+se), colour = "black", width = 0.2) +
+  coord_cartesian(ylim=c(0.03,0.05)) +
+  ylab("Egg Volume (mm3)") +
+  xlab("Bleaching History") +
+  #scale_fill_hue(name="", breaks = c("Bleached", "NonBleached"), labels = c("Bleached", "Nonbleached")) +
+  theme_bw() +
+  theme(plot.title = element_text(lineheight = 0.8, face = "bold",size = 25),
+        axis.title = element_text(size = 15),
+        panel.grid.major=element_blank(),
+        strip.text = element_text(size = 25),
+        # panel.grid.minor=element_blank(),
+        panel.border = element_blank(),
+        #  plot.background=element_blank(),
+        legend.title=element_blank(),
+        legend.text = element_blank(),
+        legend.position = "none",
+        axis.line.x = element_line(color = "black"),
+        axis.line.y = element_line(color = "black"),
+        axis.text.y = element_text(size = 15),
+        axis.text.x = element_blank(),
+        axis.title.y = element_text(size = 20),
+        axis.title.x = element_blank())
+EggVol.fig  
+
+```
+
+
+```{r}
+
+Vol.mod <- lmer(vol.mm3 ~ B.NB*Year + (1|SpawningMonth) + (1|Colony),  Vol2)
+Anova(Vol.mod, type = 2)
+anova(Vol.mod, type =2)
+summary(Vol.mod)
+qqnorm(residuals(Vol.mod))
+shapiro.test(residuals(Vol.mod))
+emmeans(Vol.mod, pairwise~Year*B.NB, adjust = "tukey")
+
+plot(residuals(Vol.mod))
+simulationOutput <- simulateResiduals(fittedModel = Vol.mod)
+plot(simulationOutput)
+testUniformity(simulationOutput)
+testDispersion(simulationOutput)
+```
+
+
+Eggs per Bundle ~ BleachingHistory * Year
+```{r}
+buns <- read.csv("Lenz_McapExSitu_EggBundles2016-2017.csv")
+buns <- na.omit(buns)
+buns$Year <- as.factor(buns$Year)
+range(buns$EggsPerBundle)
+buns <- buns[which(buns$EggsPerBundle > 1),]
+buns$sqEggsPerBundle <- sqrt(buns$EggsPerBundle)
+hist(buns$EggsPerBundle)
+range(buns$EggsPerBundle)
+
+buns$B.NB <- ifelse(buns$Colony.ID %in% c(146,118,116, 124, 120,174, 150), "Nonbleach",
+             ifelse(buns$Colony.ID %in% c(117,119, 175, 125, 149, 173, 123,121), "Bleach", NA)) #assign bleaching history to colony ID
+buns$B.NB <- as.factor(buns$B.NB)
+
+buns1 <- summarySE(buns, measurevar = "EggsPerBundle", groupvars = c("Year", "Colony.ID", "Date", "B.NB"))
+buns1 <- buns1[which(buns1$N > 1),]
+
+range(buns$EggsPerBundle)
+range(buns1$EggsPerBundle)
+
+buns2 <- summarySE(buns1, measurevar = "EggsPerBundle", groupvars = c("Year", "SpawningMonth", "Colony.ID", "B.NB"))
+range(buns2$EggsPerBundle)
+buns3 <- summarySE(buns2, measurevar = "EggsPerBundle", groupvars = c("Year", "Colony.ID", "B.NB"))
+buns4 <- summarySE(buns3, measurevar = "EggsPerBundle", groupvars = c("Year", "B.NB"))
+buns5 <- summarySE(buns3, measurevar = "EggsPerBundle", groupvars = c("Year"))
+(11.04-9.74)/(9.74)*100
+
+```
+
+Linear model
+```{r}
+hist(buns$EggsPerBundle)
+buns.mod1 <- lmer(EggsPerBundle~B.NB*Year + (1|Colony.ID) + (1|SpawningMonth), buns2)
+Anova(buns.mod1, type = 2)
+anova(buns.mod1, type = 2)
+summary(buns.mod1)
+emmeans(buns.mod1, pairwise~Year, adjust = "tukey")
+
+
+qqnorm(residuals(buns.mod1))
+plot(residuals(buns.mod1))
+simulationOutput <- simulateResiduals(fittedModel = buns.mod1)
+plot(simulationOutput)
+testUniformity(simulationOutput)
+testDispersion(simulationOutput)
+shapiro.test(residuals(buns.mod1))
+```
+
+Buns Figure - Parent - Year
+
+```{r}
+Buns.fig <- ggplot(buns4, aes(x=B.NB, y=EggsPerBundle, fill = B.NB)) + 
+  geom_bar(position="dodge", stat = "identity", colour="black") +
+  scale_fill_manual(values = c("bisque", "chocolate4")) +
+  facet_grid(~Year) +
+  geom_errorbar(aes(ymin=EggsPerBundle-se, ymax=EggsPerBundle+se), colour = "black", width = 0.2, position = position_dodge(0.9)) +
+  coord_cartesian(ylim=c(5,15)) +
+  ylab("Eggs per Bundle") +
+  xlab("Bleaching History") +
+  #scale_fill_hue(name="", breaks = c("Bleached", "NonBleached"), labels = c("Bleached", "Nonbleached")) +
+   theme(plot.title = element_text(lineheight = 0.8, face = "bold",size = 25),
+        axis.title = element_text(size = 15),
+        panel.grid.major=element_blank(),
+        strip.text = element_blank(),
+        # panel.grid.minor=element_blank(),
+        panel.border = element_blank(),
+        #  plot.background=element_blank(),
+        legend.title=element_blank(),
+        legend.text = element_blank(),
+        legend.position = "none",
+        axis.line.x = element_line(color = "black"),
+        axis.line.y = element_line(color = "black"),
+        axis.text.y = element_text(size = 15),
+        axis.text.x = element_text(size = 15),
+        axis.title.y = element_text(size = 20),
+        axis.title.x = element_text(size = 20))
+Buns.fig 
+```
+
+
+Percent Abnormal Eggs
+```{r}
+ab.buns <- summarySE(buns, measurevar = "Prop.Abnormal", groupvars = c("Year", "SpawningMonth", "Date","Colony.ID", "B.NB"), na.rm=T)
+ab.buns$PerAb <- ab.buns$Prop.Abnormal*100
+ab.buns1 <- summarySE(ab.buns, measurevar = "PerAb", groupvars = c("Year", "Colony.ID", "B.NB", "SpawningMonth"), na.rm=T)
+ab.buns2 <- summarySE(ab.buns1, measurevar = "PerAb", groupvars = c("Year", "B.NB", "Colony.ID"), na.rm=T)
+ab.buns3 <- summarySE(ab.buns2, measurevar = "PerAb", groupvars = c("Year", "B.NB"), na.rm=T)
+ab.buns4 <- summarySE(ab.buns2, measurevar = "PerAb", groupvars = c("Year"), na.rm=T)
+PerDiffAb <- (19.74-4.04)/19.74*100
+PerDiffAb
+```
+
+Linear model to compare Percent Abnormal Eggs by bleaching history and year
+```{r}
+perab.lm <- lmer((PerAb)~B.NB*Year + (1|Colony.ID) + (1|SpawningMonth), ab.buns1)
+
+Anova(perab.lm)
+anova(perab.lm, type = 2)
+summary(perab.lm)
+
+boxplot(ab.buns$Prop.Abnormal~ab.buns$B.NB*ab.buns$Year)
+plot(residuals(perab.lm))
+qqnorm(residuals(perab.lm))
+shapiro.test(residuals(perab.lm))
+
+simulationOutput <- simulateResiduals(fittedModel = perab.lm)
+plot(simulationOutput)
+testUniformity(simulationOutput)
+testDispersion(simulationOutput)
+```
+
+
+Percent Abnormal Eggs
+```{r}
+AbnormalEgg.fig <- ggplot(ab.buns2, aes(x=B.NB, y=PerAb)) + 
+  geom_bar(position="dodge", stat = "identity", colour="black", aes (fill = B.NB)) +
+  facet_grid(~Year) +
+  geom_errorbar(aes(ymin=PerAb-se, ymax=PerAb+se), colour = "black", width = 0.2, position = position_dodge(0.9)) +
+  labs(x = "Bleaching History", y = "% Egg Abnormality")  +
+  coord_cartesian(ylim=c(0,30)) +
+  scale_y_continuous(expand = c(0,0)) +
+   scale_fill_manual(values = c("bisque", "chocolate4")) +
+  #ggtitle("A.") +
+  theme_bw() +
+  theme(plot.title = element_text(lineheight = 0.8, face = "bold",size = 25),
+        axis.title = element_text(size = 15),
+        panel.grid.major=element_blank(),
+        strip.text = element_blank(),
+        # panel.grid.minor=element_blank(),
+        panel.border = element_blank(),
+        #  plot.background=element_blank(),
+        legend.title=element_blank(),
+        legend.text = element_blank(),
+        legend.position = "none",
+        axis.line.x = element_line(color = "black"),
+        axis.line.y = element_line(color = "black"),
+        axis.text.y = element_text(size = 15),
+        axis.text.x = element_text(size = 15),
+        axis.title.y = element_text(size = 20),
+        axis.title.x = element_text(size = 20))
+
+AbnormalEgg.fig
+```
+
+Combine graphics
+```{r}
+g <- ggplotGrob(spawnprop.fig)
+g1 <- ggplotGrob(annfec.fig)
+g2 <- ggplotGrob(EggVol.fig)
+g3 <- ggplotGrob(Buns.fig)
+g4 <- ggplotGrob(AbnormalEgg.fig)
+
+Repro.Fig <- ggarrange(g1, g2, g3, g4, heights = c(2, 2),
+          ncol = 2, nrow = 2, align = "v")
+
+
+ggsave("ReproFitness.pdf", Repro.Fig, width = 8, height = 15, dpi = 1000)
+
+while (!is.null(dev.list()))  dev.off()
+```
+
+## PART II: SELECTIVE BREEDING 
+
+Attempted Crosses:
+```{r}
+BB <- 7/10*100
+BNB <- 4/6*100
+NBB <- 4/10*100
+NBNB <- 7/8*100
+
+c(BB,BNB,NBB, NBNB)
+```
+
+
+Fertilization Success
+```{r}
+fert <- read.csv("Mcap_FertilizationJuly2016.csv", header=TRUE, sep=",", na.strings=T)
+read.csv("")
+fert$perc.fert <- fert$Prop.Fert*100
+fert$Dam <- as.factor(fert$Dam)
+fert$Sire <- as.factor(fert$Sire)
+head(fert)
+summary(fert)
+
+fert$SireBNB <- ifelse(fert$Sire %in% c(146,118,116, 124, 120,174, 150), "Nonbleach",
+             ifelse(fert$Sire %in% c(117,119, 175, 125, 149, 173, 123,121), "Bleach", NA)) #assign bleaching history to colony ID
+
+fert$DamBNB <- ifelse(fert$Dam %in% c(146,118,116, 124, 120,174, 150), "Nonbleach",
+             ifelse(fert$Dam %in% c(117,119, 175, 125, 149, 173, 123,121), "Bleach", NA)) #assign bleaching history to colony ID
+
+fert$SireBNB <- as.factor(fert$SireBNB)
+fert$DamBNB <- as.factor(fert$DamBNB)
+fert$Prop.2cell <- as.numeric(fert$X2.cell/fert$Fertilized)
+fert$Prop.4cell <-  as.numeric(fert$X4.cell/fert$Fertilized)
+fert$Prop.8cell <-  as.numeric(fert$X8.cell/fert$Fertilized)
+fert$Prop.16cell <-  as.numeric(fert$X16.cell/fert$Fertilized)
+
+
+```
+
+
+```{r}
+
+plot(Prop.Fert~Cross,fert)
+
+fert.sum <- summarySE(fert, measurevar = "perc.fert",groupvars = c("Cross","Conical","Dam","Sire", "DamBNB", "SireBNB"), na.rm=T)
+
+fert.mod1 <- lmer(perc.fert~Cross + (1|Dam) + (1|Sire), fert)
+Anova(fert.mod1, type = 2)
+summary(fert.mod1)
+emmeans(fert.mod1, pairwise~Cross) #post-hoc analysis - no significant contrasts
+
+plotNormalHistogram(residuals(fert.mod1))
+
+shapiro.test(residuals(fert.mod1))
+simulationOutput <- simulateResiduals(fittedModel = fert.mod1)
+plot(simulationOutput)
+testUniformity(simulationOutput)
+testDispersion(simulationOutput)
+
+anova(fert.mod2)
+Anova(fert.mod2)
+summary(fert.mod2)
+emmeans(fert.mod2, pairwise~Cross, adjust = "Tukey") #marginal significance for 2 contrasts
+
+```
+Fertilization Success
+```{r}
+fert.sum <- summarySE(fert, measurevar = "Prop.Fert",groupvars = c("Cross","Conical"), na.rm=T)
+
+fert.sum2 <- summarySE(fert.sum, measurevar = "Prop.Fert", groupvars = "Cross", na.rm=T)
+colnames(fert.sum2) <- c("Cross", "n", "mean", "sd", "sem", "ci")
+fert.sum2$Cross<-c("BxB", "BxNB", "NBxB", "NBxNB")
+
+CrossMean <- (59.33+39.75+38.58)/3
+FertDiff <- ((84.57-CrossMean)/((84.57+CrossMean)/2))*100
+
+Fert.fig <- ggplot(fert.sum2, aes(x=Cross, y = mean, sep = "")) + #plot objects
+  geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), colour = "black", width = 0.2) + #add sem error bars
+  geom_point(size = 8) + #include circular points
+  scale_shape_manual(name = "", values = c(1,19)) + #B and NB symbol shapes
+  ylab("Proportion Fertilized") +
+  ylim(c(0,1)) +
+  #ggtitle("Fertilization Success") +
+  theme_bw() +
+  theme(plot.title = element_text(lineheight = 0.8, face = "bold", size = 25),
+        axis.title = element_text(size = 20),
+        panel.grid.major=element_blank(),
+        panel.grid.minor=element_blank(),
+        panel.border = element_blank(),
+        plot.background=element_blank(),
+        legend.position = "none",
+        legend.key = element_blank(), 
+        #legend.text = element_blank(),
+        axis.line.x = element_line(color = "black"),
+        axis.line.y = element_line(color = "black"),
+        legend.text = element_blank(),
+        axis.text.y = element_text(size = 20),
+        axis.title.y = element_text(size = 25),
+        axis.text.x = element_text(size = 20),
+        axis.title.x = element_text(size = 25))
+Fert.fig
+
+BB <- 8/10*100
+BNB <- 4/6*100
+NBB <- 4/7*100
+NBNB <- 7/8*100
+
+c(BB, BNB, NBB, NBNB)
+
+```
+
+#Developmental Stages
+
+Analysis
+```{r}
+
+mod.2cell <- lmer(Prop.2cell~Cross + (1|Dam) + (1|Sire), fert)
+fixef(mod.2cell)
+Anova(mod.2cell, type = 2)
+summary(mod.2cell)
+qqnorm(residuals(mod.2cell))
+plot(residuals(mod.2cell))
+emmeans(mod.2cell, pairwise~Cross, adjust = "tukey")
+shapiro.test(residuals(mod.2cell))
+
+kruskal.test(Prop.4cell ~ Cross,fert) 
+mod.4cell <- lmer(Prop.4cell~Cross + (1|Dam) + (1|Sire), fert)
+Anova(mod.4cell, type = 2)
+anova(mod.4cell)
+summary(mod.4cell)
+emmeans(mod.4cell, pairwise~Cross, adjust = "tukey")
+qqnorm(residuals(mod.4cell))
+plot(residuals(mod.4cell))
+shapiro.test(residuals(mod.4cell))
+
+
+kruskal.test(Prop.8cell ~ Cross,fert) 
+mod.8cell <- lmer(Prop.8cell~Cross + (1|Dam) + (1|Sire), fert)
+Anova(mod.8cell, type =2)
+qqnorm(residuals(mod.8cell))
+emmeans(mod.8cell, pairwise~Cross, adjust = "tukey")
+plot(residuals(mod.8cell))
+emmeans(mod.8cell, pairwise~Cross, adjust = "tukey")
+shapiro.test(residuals(mod.8cell))
+
+
+kruskal.test(Prop.16cell ~ Cross,fert) 
+mod.16cell <- lmer((Prop.16cell)~Cross + (1|Dam) + (1|Sire),fert)
+Anova(mod.16cell, type = 2)
+summary(mod.16cell)
+qqnorm(residuals(mod.16cell))
+plot(residuals(mod.16cell))
+emmeans(mod.16cell, pairwise~Cross, adjust = "tukey")
+shapiro.test(residuals(mod.16cell))
+
+```
+
+```{r}
+fert_long <- gather(fert, Devo, Prop, Prop.2cell, Prop.4cell, Prop.8cell, Prop.16cell, factor_key = TRUE)
+head(fert_long)
+fert_long <- na.omit(fert_long)
+
+fert_long.ed <- subset(fert_long, select = c("Conical", "T1.Devo.Tub.No", "Cross", "Dam", "Sire", "SireBNB", "DamBNB", "Devo", "Prop"))
+fert_long.ed$Prop <- as.numeric(fert_long.ed$Prop)
+head(fert_long.ed)
+dev.sum1 <- summarySE(fert_long.ed, measurevar = "Prop",groupvars = c("Cross","Conical", "SireBNB", "DamBNB", "Devo"), na.rm=T)
+
+dev.sum2 <- summarySE(dev.sum1, measurevar = "Prop",groupvars = c("Cross", "SireBNB", "DamBNB", "Devo"), na.rm=T)
+head(dev.sum2)
+
+dev.sum2$newmean[dev.sum2$Devo == "Prop.16cell"] <- with(dev.sum2, Prop[Devo == "Prop.16cell"])
+dev.sum2$newmean[dev.sum2$Devo == "Prop.8cell"] <- with(dev.sum2, Prop[Devo == "Prop.16cell"] + Prop[Devo == "Prop.8cell"])
+dev.sum2$newmean[dev.sum2$Devo == "Prop.4cell"] <- with(dev.sum2, Prop[Devo == "Prop.16cell"] + Prop[Devo == "Prop.8cell"] + Prop[Devo == "Prop.4cell"])
+dev.sum2$newmean[dev.sum2$Devo == "Prop.2cell"] <- with(dev.sum2, Prop[Devo == "Prop.16cell"] + Prop[Devo == "Prop.8cell"] + Prop[Devo == "Prop.4cell"] + Prop[Devo == "Prop.2cell"])
+     
+ 
+Dev.fig <- ggplot(data=dev.sum2, aes(x=Cross, y=Prop)) + 
+  geom_bar(stat="identity", width = 0.4, aes(fill = Devo)) +
+  geom_errorbar(aes(ymax=newmean+se,  ymin=newmean-se), width=0.15, position = "identity") +
+  ylim(0,1.3) +
+  xlab("Cross") + ylab("Proportion") + 
+  scale_fill_manual(name="Developmental\nStage",
+                         breaks=c("Prop.2cell", "Prop.4cell", "Prop.8cell", "Prop.16cell"),
+                         labels=c("2-Cell", "4-Cell", "8-Cell", "16-Cell"),
+                      values = c("lightgrey", "darkgrey", "dimgrey", "black")) +
+  scale_x_discrete(limit = c("BB", "BNB", "NBB", "NBNB"),
+                     labels = c("B×B","B×NB","NB×B", "NB×NB")) +
+  theme(legend.position="right",
+    axis.line.x = element_line(color = "black"),
+    axis.line.y = element_line(color = "black"),
+    axis.text.y = element_text(size = 20),
+    axis.title.y = element_text(size = 25),
+    axis.text.x = element_text(size = 20),
+    axis.title.x = element_text(size = 25))
+Dev.fig
+```
+
+```{r}
+Embryo.Fig <- ggarrange(Fert.fig, Dev.fig, heights = c(3, 3),
+          ncol = 1, nrow = 2, align = "h")
+
+  
+ggsave("Embryo.pdf", Embryo.Fig, width = 8, height = 15, dpi = 1000)
+```
+
+#Offspring: Larvae/Setters/Dead
+```{r}
+F1 <- read.csv("Lenz_Settlement3_CompData2016.csv")
+F1$DayPostFert <- as.factor(F1$DayPostFert)
+
+F1.larv <- subset(F1, select = c("Conical", "EggDonor", "SpermDonor", "Cross", "DayPostFert", "Prop.Larvae"))
+
+larv.kt <- kruskal.test(Prop.Larvae~Cross, data=F1.larv)
+
+larv.mod <- lmer(sqrt(Prop.Larvae) ~ Cross + (1|DayPostFert) + (1|EggDonor) + (1|SpermDonor), F1.larv)
+Anova(larv.mod, type = 2)
+summary(larv.mod)
+emmeans(larv.mod, pairwise~Cross*DayPostFert , adjust = "tukey")
+shapiro.test(residuals(larv.mod))
+qqnorm(residuals(larv.mod))
+
+```
+
+Larvae Plot
+```{r}
+
+F1.larv.sum <- summarySE(F1.larv, measurevar = "Prop.Larvae",groupvars = c("DayPostFert", "Cross"), na.rm=FALSE)
+
+
+F1.larv.fig <- ggplot(data = F1.larv.sum, aes(x=DayPostFert, y = Prop.Larvae, group = Cross)) +
+  geom_line(aes(color = Cross), size = 1, position = position_dodge(width = .2)) +
+  geom_point(aes(color = Cross), size = 3, position = position_dodge(width = .2)) +
+  geom_errorbar(aes(ymax=Prop.Larvae+se,  ymin=Prop.Larvae-se), width=0.15, position = position_dodge(width = .2)) +
+  #scale_linetype_manual(values = c("dashed","solid")) +
+  #scale_color_manual(values = c("Bleach" = "white", "Nonbleach" = "grey34")) +
+  #scale_shape_manual(values = c(19, 16)) +
+  ylab("Proportion Larvae") +
+  xlab("Days Post-Fertilization") +
+  scale_colour_manual(values = c("bisque", "darkgoldenrod3", "darkorange1", "chocolate4")) +
+  #scale_colour_manual(values = col) +
+  theme_bw() +
+  theme(plot.title = element_text(lineheight = 0.8, face = "bold",size = 25), # panel.grid.minor=element_blank()
+        plot.margin = margin(3,3,8,8, "pt"),
+        panel.border = element_blank(), #  plot.background=element_blank()
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.text = element_text(size=25), #Label Year   
+        legend.title = element_blank(),
+        legend.text = element_blank(),
+        legend.key = element_blank(),
+        #legend.position = c(0.8,0.7),
+        axis.line.x = element_line(color = "black"),
+        axis.line.y = element_line(color = "black"),
+        axis.text.y = element_text(size = 15),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size=20)) 
+F1.larv.fig
+```
+
+```{r}
+F1 <- read.csv("Lenz_Settlement3_CompData2016.csv")
+
+F1.set <- subset(F1, select = c("Conical", "EggDonor", "SpermDonor", "Cross", "DayPostFert", "Prop.SettledAlive"))
+F1.set$DayPostFert <- as.factor(F1.set$DayPostFert)
+
+set.mod <- lmer(sqrt(Prop.SettledAlive) ~ Cross  + (1|DayPostFert) + (1|EggDonor) + (1|SpermDonor), F1.set)
+Anova(set.mod, type = 2)
+summary(set.mod)
+posthoc1 <- emmeans(set.mod, pairwise~Cross, adjust = "tukey")
+shapiro.test(residuals(set.mod))
+qqnorm(residuals(set.mod))
+
+
+F1.set.sum <- summarySE(F1.set, measurevar = "Prop.SettledAlive",groupvars = c("DayPostFert", "Cross"), na.rm=FALSE)
+
+
+F1.set.fig <- ggplot(data = F1.set.sum, aes (x=DayPostFert, y = Prop.SettledAlive, group = Cross)) +
+  geom_line(aes(color = Cross), size = 1, position = position_dodge(width = .2)) +
+  geom_point(size=5, aes(color = Cross), position = position_dodge(width = .2)) +
+  geom_errorbar(aes(ymax=Prop.SettledAlive+se,  ymin=Prop.SettledAlive-se), width=0.2, position = position_dodge(width = .2))  +
+  scale_colour_manual(values = c("bisque", "darkgoldenrod3", "darkorange1", "chocolate4")) +
+  ylab("Proportion Settled") +
+  xlab("Days Post-Fertilization") +
+  ylim(c(0,1)) +
+  theme_bw() +
+  theme(plot.title = element_text(lineheight = 0.8, face = "bold",size = 25), # panel.grid.minor=element_blank()
+        plot.margin = margin(3,3,8,8, "pt"),
+        panel.border = element_blank(), #  plot.background=element_blank()
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.text = element_text(size=25), #Label Year       
+        legend.title = element_blank(),
+        legend.text =element_blank(),
+        legend.key = element_blank(),
+        axis.line.x = element_line(color = "black"),
+        axis.line.y = element_line(color = "black"),
+        axis.text.y = element_text(size = 15),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size=20))
+F1.set.fig
+```
+
+```{r}
+F1.mort <- subset(F1, select = c("Conical", "EggDonor", "SpermDonor", "Cross", "DayPostFert", "Dead"))
+
+mort.mod <- lmer(Dead~Cross + (1|DayPostFert) +(1|EggDonor) + (1|SpermDonor), F1.mort)
+Anova(mort.mod, type = 2)
+summary(mort.mod)
+shapiro.test(residuals(mort.mod))
+qqnorm(residuals(mort.mod))
+
+F1.mort.sum <- summarySE(F1.mort, measurevar = "Dead", groupvars = c("DayPostFert", "Cross"), na.rm=FALSE)
+
+F1.mort.fig <- ggplot(data = F1.mort.sum, aes (x=DayPostFert, y = Dead, group = Cross)) +
+  geom_line(aes(color = Cross), size = 1,  position = position_dodge(width = 2)) +
+  geom_point(size=5, aes(color = Cross), position = position_dodge(width = 2)) +
+  geom_errorbar(aes(ymax=Dead+se,  ymin=Dead-se), width=0.2, position = position_dodge(width = 2)) +
+  scale_colour_manual(values = c("bisque", "darkgoldenrod3", "darkorange1", "chocolate4")) +
+  ylab("Proportion Mortality") +
+  xlab("Days Post-Fertilization") +
+  ylim(c(0,1)) +
+  theme_bw() +
+  theme(plot.title = element_text(lineheight = 0.8, face = "bold",size = 25), # panel.grid.minor=element_blank()
+        plot.margin = margin(3,3,8,8, "pt"),
+        panel.border = element_blank(), #  plot.background=element_blank()
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.text = element_text(size=25), #Label Year 
+        legend.title = element_blank(),
+        legend.text =element_blank(),
+        legend.key = element_blank(),
+        axis.line.x = element_line(color = "black"),
+        axis.line.y = element_line(color = "black"),
+        axis.text.y = element_text(size = 15),
+        axis.text.x = element_text(size = 15, angle = 90, hjust = 1),
+        axis.title.x = element_text(size=20),
+        axis.title.y = element_text(size=20))
+F1.mort.fig
+```
+
+
+```{r}
+pdf('F1.phy2016.pdf', width=8, height=10)
+grid.arrange((arrangeGrob(F1.larv.fig, F1.set.fig, cross.km, nrow=3)))
+dev.off()
+
+p1 <- ggplotGrob(F1.larv.fig)
+p2 <- ggplotGrob(F1.set.fig)
+p3 <- ggplotGrob(cross.km)
+
+F1.Fig <- ggarrange(Fert.fig, F1.larv.fig, F1.set.fig,cross.km, heights = c(3, 3),
+          ncol = 2, nrow = 3, align = "v")
+
+  
+ggsave("F1.pdf", F1.Fig, width = 8, height = 15, dpi = 1000)
+dev.off()
+while (!is.null(dev.list()))  
+```
+
+
+
+
+Kaplan Meier Survivorship Estimate
+```{r}
+
+km <-read.csv("Lenz_KM_SurvivalTest2016.csv", header=TRUE, sep=",", na.strings="NA")
+
+km$status <- ifelse(km$censor %in% 0, 1,
+                   ifelse(km$censor %in% 1, 2 ,NA)) 
+
+km$crossN <- ifelse(km$Cross %in% "BB", 1,
+                   ifelse(km$Cross %in% "BNB", 2,
+                          ifelse(km$Cross %in% "NBB", 3,
+                                 ifelse(km$Cross %in% "NBNB", 4,NA))))
+
+cox.crossN <- coxph(Surv(Timepoint,status) ~ crossN, data = km) #create model
+summary(cox.crossN) # statistical summary 
+
+cox.cross <- coxph(Surv(Timepoint,status) ~ Cross, data = km) #create model
+summary(cox.cross) # statistical summary 
+
+res <- pairwise_survdiff(Surv(Timepoint, status) ~ Cross*Conical.ID,
+     data = km)
+symnum(res$p.value, cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 0.1, 1),
+   symbols = c("****", "***", "**", "*", "+", " "),
+   abbr.colnames = FALSE, na = "")
+
+km$crossD <- ifelse(km$Cross %in% c("BB","BNB"), "B",
+                   ifelse(km$Cross %in% c("NBB", "NBNB"), "NB", NA))
+
+cox.crossD <- coxph(Surv(Timepoint,status) ~ crossD, data = km) #create model
+summary(cox.crossD) # statistical summary  
+                     
+km$crossS <- ifelse(km$Cross %in% c("BB","NBB"), "B",
+                   ifelse(km$Cross %in% c("BNB", "NBB"), "NB", NA))
+
+cox.crossS <- coxph(Surv(Timepoint,status) ~ crossS, data = km) #create model
+summary(cox.crossS) # statistical summary 
+
+cox.zph(cox.crossN) 
+cox.zph(cox.crossD)
+cox.zph(cox.crossS) #assumptions of statistical analyses
+
+```
+
+```{r}
+cox.egg <- coxph(Surv(Timepoint,censor) ~ Egg, km)
+summary(cox.egg)
+
+cox.sperm <- coxph(Surv(Timepoint,censor) ~ Sperm, km)
+summary(cox.sperm)
+
+cross.km <- ggsurvplot(cox.cross,              # survfit object with calculated statistics.
+                       risk.table = FALSE,       # show risk table.
+                       pval = TRUE,             # show p-value of log-rank test.
+                       pval.size=10,
+                       conf.int = TRUE,         # show confidence intervals for point estimaes of survival curves.
+                       main="Cox Model",
+                       linetype = "strata",
+                       size = 1,
+                       font.x = c(18, "bold", "black"),
+                       font.y = c(18, "bold", "black"), 
+                       palette = c("burlywood2", "chocolate3"),
+                       legend.title = "Cross",
+                       legend.labs = c("BxB", "BxNB", "NBxB", "NBxNB"),
+                       xlab = "",
+                       ylab = "",
+                       font.main = c(20, "bold", "black"),
+                       font.legend = c(16, "bold", "black"))
+
+
+
+
+
+cross.fit <- survfit(Surv(Timepoint, censor) ~ + Cross, type="kaplan-meier", conf.type="log", data = km)
+summary(cross.fit)
+
+BB.fit <- (0.93-0.07)/0.93*100
+BNB.fit <- (0.955-0.117)/0.955*100
+NBB.fit <- (0.994-0.143)/0.994*100
+NBNB.fit <- (0.947-0.215)/0.947*100
+
+(0.215-0.07)/0.215*100
+(0.143-0.07)/0.142*100
+
+((67.44 + 51.40)/2)
+
+
+
+cross.km <- ggsurvplot(cross.fit,              # survfit object with calculated statistics.
+                    risk.table = FALSE,       # show risk table.
+                    pval = TRUE,             # show p-value of log-rank test.
+                    #pval.size=10,
+                    #conf.int = TRUE,         # show confidence intervals for point estimaes of survival curves
+                    main="Kaplan-Meier Analysis",
+                    #linetype = "strata",
+                    size = 2,
+                    font.x = c(18, "bold", "black"),
+                    font.y = c(18, "bold", "black"), 
+                    legend.title = "Cross",
+                    legend.labs = c("B x B", "B x NB", "NB x B", "NB x NB"),
+                    palette = c("bisque", "darkgoldenrod3","darkorange1", "chocolate4"),
+                    xlab = "",
+                    ylab = "",
+                    font.main = c(20, "bold", "black"),
+                    font.legend = c(16, "bold", "black"))
+
+cross.km
+```
+
+```{r}
+egg.fit <- survfit(Surv(Timepoint, censor) ~ Egg, type="kaplan-meier", conf.type="log", data = km)
+summary(egg.fit)
+egg.km <- ggsurvplot(egg.fit,                     # survfit object with calculated statistics.
+  risk.table = FALSE,       # show risk table.
+  size = 2,
+  pval = TRUE,             # show p-value of log-rank test.
+  pval.size=10,
+  #conf.int = TRUE ,         # show confidence intervals for point estimaes of survival curves.
+  font.x = c(18, "bold", "black"),
+  font.y = c(18, "bold", "black"), 
+  font.main = c(20, "bold", "black"),
+  font.legend = c(16, "bold", "black"),
+  palette = c("bisque", "chocolate4"),
+  xlab = "",
+  legend.title = "Dam",
+  legend.labs = c("Bleached", "Nonbleached")) #present narrower X axis, but not affect survival estimates.
+
+egg.km
+```
+
+```{r}
+sperm.fit <- survfit(Surv(Timepoint, censor) ~ Sperm, type="kaplan-meier", conf.type="log", data = km)
+summary(sperm.fit)
+
+sperm.km <- ggsurvplot(sperm.fit,                     # survfit object with calculated statistics.
+                     size = 2,
+                     #risk.table = TRUE,       # show risk table.
+                     #risk.table.y.text.col = TRUE,
+                     pval = TRUE,             # show p-value of log-rank test.
+                     pval.size=10,
+                     #break.time.by = c(6, 7, 28, 53, 59),
+                     #tables.height = 0.2,
+                     #tables.theme = theme_cleantable(),
+                     #conf.int = TRUE ,         # show confidence intervals for point estimaes of survival curves.
+                     #conf.inf.style = c("ribbon","step"),
+                     xlab = "Days Post-Fertilization",
+                     ylab = "",
+                     font.x = c(18, "bold", "black"),
+                     font.y = c(18, "bold", "black"), 
+                     font.main = c(20, "bold", "black"),
+                     palette = c("bisque", "chocolate4"),
+                     font.legend = c(16, "bold", "black"),
+                     legend.title = "Sire",
+                     legend.labs = c("Bleached", "Nonbleached")) # present narrower X axis, but not affect survival estimates.
+
+sperm.km
+
+ tables <- ggsurvtable(sperm.fit, data = Surv, color = "strata",
+      y.text = FALSE)
+    # Risk table
+    tables$risk.table
+    # Number of cumulative events
+    tables$cumevents
+    # Number of cumulative censoring
+    tables$cumcensor
+```
+
+```{r}
+
+splots <- list(cross.km, egg.km, sperm.km)
+
+res <- arrange_ggsurvplots(splots, print = FALSE, ncol=1, nrow =3, risktable.height = 0.4)
+ggsave("F1_KM2.pdf", res, width = 8, height = 15, dpi = 1000)
+dev.off()
+
+```
